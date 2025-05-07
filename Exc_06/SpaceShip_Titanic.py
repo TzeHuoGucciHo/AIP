@@ -3,313 +3,287 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sb
 import torch
-import torch.nn as nn
-import torch.optim as optim
-
-
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn import metrics
 from sklearn.svm import SVC
-from torch.fx.experimental.proxy_tensor import extract_val
 from xgboost import XGBClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
-from torch.utils.data import TensorDataset, DataLoader
-
 import warnings
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
-dataframe = pd.read_csv(r"C:\Users\Tze Huo Gucci Ho\Desktop\Git Projects\AIP\Exc_06\Data\train.csv")
+### Exercise 6.a
 
-    # Data Overview
+import torch
+import torch.nn as nn
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import precision_score, recall_score, f1_score
 
-#print(dataframe.head())
+## Exercise 6.a.1
+train_path = r"C:\Users\Tze Huo Gucci Ho\Desktop\Git Projects\AIP\Exc_06\Data\train.csv"
+test_path = r"C:\Users\Tze Huo Gucci Ho\Desktop\Git Projects\AIP\Exc_06\Data\test.csv"
 
-#print(dataframe.shape)
+df_train = pd.read_csv(train_path)
+df_test = pd.read_csv(test_path)
 
-#print(dataframe.info())
+# Data Preprocessing & Feature Engineering
 
-#print(dataframe.describe())
+def preprocess(df, is_train=True):
+    df = df.copy()
 
-    # Data Cleaning
+    # Fill CryoSleep-related expenses
+    col = df.loc[:, 'RoomService':'VRDeck'].columns
+    df.loc[df['CryoSleep'] == True, col] = 0.0
 
-#dataframe.isnull().sum().plot.bar()
-#plt.show()
+    for c in col:
+        for val in [True, False]:
+            temp = df['VIP'] == val
+            k = df.loc[temp, c].astype(float).mean()
+            df.loc[temp, c] = df.loc[temp, c].fillna(k)
 
-col = dataframe.loc[:,'RoomService':'VRDeck'].columns
-#print(dataframe.groupby('VIP')[col].mean())
+    # Fill HomePlanet based on VIP status
+    col = 'HomePlanet'
+    df.loc[df['VIP'] == False, col] = df.loc[df['VIP'] == False, col].fillna('Earth')
+    df.loc[df['VIP'] == True, col] = df.loc[df['VIP'] == True, col].fillna('Europa')
 
-#print(dataframe.groupby('CryoSleep')[col].mean())
+    # Fill Age
+    df['Age'] = df['Age'].fillna(df[df['Age'] < 61]['Age'].mean())
 
-temp = dataframe['CryoSleep'] == True
-dataframe.loc[temp, col] = 0.0
-
-for c in col:
-    for val in [True, False]:
-        temp = dataframe['VIP'] == val
-
-        k = dataframe.loc[temp, c].astype(float).mean()
-        dataframe.loc[temp, c] = dataframe.loc[temp, c].fillna(k)
-
-#sb.countplot(data=dataframe, x='VIP',
-#             hue='HomePlanet')
-#plt.show()
-
-col = 'HomePlanet'
-temp = dataframe['VIP'] == False
-dataframe.loc[temp, col] = dataframe.loc[temp, col].fillna('Earth')
-
-temp = dataframe['VIP'] == True
-dataframe.loc[temp, col] = dataframe.loc[temp, col].fillna('Europa')
-
-# sb.boxplot(dataframe['Age'],orient='h')
-#plt.show()
-
-temp = dataframe[dataframe['Age'] < 61]['Age'].mean()
-dataframe['Age'] = dataframe['Age'].fillna(temp)
-
-#sb.countplot(data=dataframe,
-#             x='Transported',
-#             hue='CryoSleep')
-#plt.show()
-
-#dataframe.isnull().sum().plot.bar()
-#plt.show()
-
-for col in dataframe.columns:
-    if dataframe[col].isnull().sum() == 0:
-        continue
-
-    if dataframe[col].dtype == object or dataframe[col].dtype == bool:
-        dataframe[col] = dataframe[col].fillna(dataframe[col].mode()[0])
-
-    else:
-        dataframe[col] = dataframe[col].fillna(dataframe[col].mean())
-
-#print("Number of Null Values in Dataset: ", dataframe.isnull().sum().sum())
+    # Fill remaining missing values
+    for col in df.columns:
+        if df[col].isnull().sum() == 0:
+            continue
+        if df[col].dtype == object or df[col].dtype == bool:
+            df[col] = df[col].fillna(df[col].mode()[0])
+        else:
+            df[col] = df[col].fillna(df[col].mean())
 
     # Feature Engineering
+    new = df["PassengerId"].str.split("_", n=1, expand=True)
+    df["RoomNo"] = new[0].astype(int)
+    df["PassengerNo"] = new[1].astype(int)
+    df.drop(['PassengerId', 'Name'], axis=1, inplace=True)
 
-new = dataframe["PassengerId"].str.split("_", n=1, expand=True)
-dataframe["RoomNo"] = new[0].astype(int)
-dataframe["PassengerNo"] = new[1].astype(int)
+    # Count passengers with same room number
+    data = df["RoomNo"]
+    for i in range(df.shape[0]):
+        temp = data == data.iloc[i]
+        df['PassengerNo'].iloc[i] = temp.sum()
 
-dataframe.drop(['PassengerId', 'Name'],
-        axis=1, inplace=True)
+    df.drop(['RoomNo'], axis=1, inplace=True)
 
-data = dataframe['RoomNo']
-for i in range(dataframe.shape[0]):
-      temp = data == data[i]
-      dataframe['PassengerNo'][i] = (temp).sum()
+    # Extract Cabin features
+    new = df["Cabin"].str.split("/", n=2, expand=True)
+    df["F1"] = new[0]
+    df["F2"] = new[1].astype(int)
+    df["F3"] = new[2]
+    df.drop(['Cabin'], axis=1, inplace=True)
 
-dataframe.drop(['RoomNo'], axis=1,
-        inplace=True)
+    # Total expenses feature
+    df['LeasureBill'] = df['RoomService'] + df['FoodCourt'] + df['ShoppingMall'] + df['Spa'] + df['VRDeck']
 
-#sb.countplot(data=dataframe,
-#             x = 'PassengerNo',
-#             hue='VIP')
-#plt.show()
+    # Encode categorical variables
+    for col in df.columns:
+        if df[col].dtype == object:
+            le = LabelEncoder()
+            df[col] = le.fit_transform(df[col])
+        if df[col].dtype == 'bool':
+            df[col] = df[col].astype(int)
 
-new = dataframe["Cabin"].str.split("/", n=2, expand=True)
-data["F1"] = new[0]
-dataframe["F2"] = new[1].astype(int)
-dataframe["F3"] = new[2]
+    return df
 
-dataframe.drop(['Cabin'], axis=1,
-        inplace=True)
+df_train = preprocess(df_train, is_train=True)
+df_test = preprocess(df_test, is_train=False)
 
-dataframe['LeasureBill'] = dataframe['RoomService'] + dataframe['FoodCourt']\
- + dataframe['ShoppingMall'] + dataframe['Spa'] + dataframe['VRDeck']
+### Exercise 6.b
 
-    # Exploratory Data Analysis
+## Exercise 6.b.1
 
-x = dataframe['Transported'].value_counts()
-#plt.pie(x.values,
-#        labels=x.index,
-#        autopct='%1.1f%%')
-#plt.show()
+# Convert data to PyTorch tensors
+# Split training data into features and labels
+X = df_train.drop('Transported', axis=1).values
+y = df_train['Transported'].values
 
-dataframe.groupby('VIP').mean(numeric_only=True)['LeasureBill'].plot.bar()
-#plt.show()
-
-for col in dataframe.columns:
-
-    if dataframe[col].dtype == object:
-        le = LabelEncoder()
-        dataframe[col] = le.fit_transform(dataframe[col])
-
-    if dataframe[col].dtype == 'bool':
-        dataframe[col] = dataframe[col].astype(int)
-
-#print(dataframe.head())
-
-#plt.figure(figsize=(10,10))
-#sb.heatmap(dataframe.corr()>0.8,
-#           annot=True,
-#           cbar=False)
-#plt.show()
-
-    # Model Training
-
-features = dataframe.drop(['Transported'], axis=1)
-target = dataframe.Transported
-
-X_train, X_val,\
-    Y_train, Y_val = train_test_split(features, target,
-                                      test_size=0.1,
-                                      random_state=22)
-
-#print(X_train.shape, X_val.shape)
-
+# Normalize the features
 scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)
-X_val = scaler.transform(X_val)
+X_scaled = scaler.fit_transform(X)
 
-    # Training using scikit-learn
+# Split data into training and validation sets (80% train, 20% validation)
+X_train, X_val, y_train, y_val = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
-from sklearn.metrics import roc_auc_score as ras
+# Convert to PyTorch tensors
+X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+y_train_tensor = torch.tensor(y_train, dtype=torch.float32).view(-1, 1)  # reshape for binary classification
 
-models = [LogisticRegression(), XGBClassifier(),
-          SVC(kernel='rbf', probability=True)]
+X_val_tensor = torch.tensor(X_val, dtype=torch.float32)
+y_val_tensor = torch.tensor(y_val, dtype=torch.float32).view(-1, 1)  # reshape for binary classification
 
-for i in range(len(models)):
-    models[i].fit(X_train, Y_train)
-
-#    print(f'{models[i]} : ')
-
-    train_preds = models[i].predict_proba(X_train)[:, 1]
-#    print('Training Accuracy : ', ras(Y_train, train_preds))
-
-    val_preds = models[i].predict_proba(X_val)[:, 1]
-#    print('Validation Accuracy : ', ras(Y_val, val_preds))
-#    print()
-
-    # Model Evaluation
-
-y_pred = models[1].predict(X_val)
-cm = metrics.confusion_matrix(Y_val, y_pred)
-disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm)
-#disp.plot()
-#plt.show()
-
-#print(metrics.classification_report
-#      (Y_val, models[1].predict(X_val)))
-
-    # Transform data ("Transported") to PyTorch tensors
-
-data_numpy = dataframe.to_numpy(dtype=float)
-
-data_tensor = torch.tensor(data_numpy, dtype=torch.float32)
-
-#print(data_tensor.shape)
-    # Outputs: torch.Size([8693, 15])
-
-x = dataframe.drop(columns=["Transported"]).to_numpy(dtype=float)
-y = dataframe["Transported"].to_numpy(dtype=float)
-
-x_tensor = torch.tensor(x, dtype=torch.float32)
-y_tensor = torch.tensor(y, dtype=torch.float32)
-
-# print(x_tensor.shape, y_tensor.shape)
-
-dataset = TensorDataset(x_tensor, y_tensor)
-dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
-
-    # Create a simple neural network with 2 layers
+## Exercise 6.b.2
 
 # Define the neural network class
-class SimpleNN(nn.Module):
-    def __init__(self, input_size, hidden_size=64):
-        super(SimpleNN, self).__init__()
-        # Define layers: 1st layer - fully connected layer (input_size -> hidden_size)
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        # Second layer - fully connected layer (hidden_size -> output size, which is 1 for binary classification)
-        self.fc2 = nn.Linear(hidden_size, 1)
-        # Activation function (ReLU for the first layer)
-        self.relu = nn.ReLU()
-        # Sigmoid activation for binary classification output
+class ImprovedNet(nn.Module):
+    def __init__(self, input_dim):
+        super(ImprovedNet, self).__init__()
+
+        self.fc1 = nn.Linear(input_dim, 128)
+        self.relu1 = nn.ReLU()
+        self.dropout1 = nn.Dropout(p=0.3)
+
+        self.fc2 = nn.Linear(128, 64)
+        self.relu2 = nn.ReLU()
+        self.dropout2 = nn.Dropout(p=0.3)
+
+        self.fc3 = nn.Linear(64, 32)
+        self.relu3 = nn.ReLU()
+        self.dropout3 = nn.Dropout(p=0.3)
+
+        self.output = nn.Linear(32, 1)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        x = self.relu(self.fc1(x))  # Apply first layer and ReLU activation
-        x = self.fc2(x)             # Apply second layer
-        return self.sigmoid(x)      # Apply Sigmoid activation for binary classification
+        x = self.dropout1(self.relu1(self.fc1(x)))
+        x = self.dropout2(self.relu2(self.fc2(x)))
+        x = self.dropout3(self.relu3(self.fc3(x)))
+        x = self.sigmoid(self.output(x))
+        return x
 
-# Model initialization
-input_size = X_train.shape[1]  # Number of features
-model = SimpleNN(input_size)
 
-# Loss function (Binary Cross-Entropy loss)
-criterion = nn.BCEWithLogitsLoss()
+# Initialize the model
 
-# Optimizer (Stochastic Gradient Descent)
-optimizer = optim.Adam(model.parameters(), lr=1e-2, weight_decay=1e-8)
+input_dim = X_train_tensor.shape[1]  # Number of features
+hidden_dim1 = 32                # You can start simple; try 32 and tune later
+hidden_dim2 = 16                # You can start simple; try 16 and tune later
+
+## Exercise 6.b.3, 6.b.4
+
+# Define loss function and optimizer
+model = ImprovedNet(input_dim=X_train_tensor.shape[1])
+criterion = nn.BCELoss()
+optimizer = torch.optim.AdamW(model.parameters(), lr=0.0005, weight_decay=1e-4)
 
 # Training loop
-epochs = 1000  # Number of epochs
-train_losses = []
-train_accuracies = []
+num_epochs = 1000
+accuracy_list = []
 
-for epoch in range(epochs):
-    model.train()  # Set the model to training mode
-    optimizer.zero_grad()  # Zero the gradients from the previous step
+# Initialize a list to store the loss values during training
+loss_list = []
+val_loss_list = []
+accuracy_list_train = []
+accuracy_list_val = []
 
-    # Forward pass
-    outputs = model(torch.tensor(X_train, dtype=torch.float32))
-    loss = criterion(outputs.squeeze(), torch.tensor(Y_train, dtype=torch.float32))  # Compute the loss
+for epoch in range(num_epochs):
+    # Training predictions
+    outputs = model(X_train_tensor)
+    loss = criterion(outputs, y_train_tensor)
 
-    # Backward pass and optimization
+    # Validation predictions
+    outputs_val = model(X_val_tensor)
+    val_loss = criterion(outputs_val, y_val_tensor)
+
+    # Backward and optimize
+    optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
-    # Record training loss and accuracy
-    train_losses.append(loss.item())
+    # Accuracy
+    predicted_train = (outputs.detach().numpy() > 0.5).astype(int)
+    accuracy_train = metrics.accuracy_score(y_train_tensor.numpy(), predicted_train)
 
-    # Calculate accuracy
-    predicted = (outputs.squeeze() > 0.5).float()
-    accuracy = (predicted == torch.tensor(Y_train, dtype=torch.float32)).float().mean()
-    train_accuracies.append(accuracy.item())
+    predicted_val = (outputs_val.detach().numpy() > 0.5).astype(int)
+    accuracy_val = metrics.accuracy_score(y_val_tensor.numpy(), predicted_val)
 
-    if (epoch + 1) % 10 == 0:
-        print(f'Epoch [{epoch + 1}/{epochs}], Loss: {loss.item():.4f}, Accuracy: {accuracy.item():.4f}')
+    # Store metrics
+    loss_list.append(loss.item())
+    val_loss_list.append(val_loss.item())
+    accuracy_list_train.append(accuracy_train)
+    accuracy_list_val.append(accuracy_val)
 
-# Plotting the loss curve
-plt.plot(train_losses)
-plt.title("Training Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
+## Exercise 6.b.5
+
+# Plot training loss
+plt.figure(figsize=(10, 4))
+
+# --- Loss plot ---
+plt.subplot(1, 2, 1)
+plt.plot(range(num_epochs), loss_list, label='Training Loss', color='red')
+plt.plot(range(num_epochs), val_loss_list, label='Validation Loss', color='orange')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.title('Loss Over Epochs')
+plt.legend()
+plt.grid(True)
+
+# --- Accuracy plot ---
+plt.subplot(1, 2, 2)
+plt.plot(range(num_epochs), accuracy_list_train, label='Training Accuracy', color='blue')
+plt.plot(range(num_epochs), accuracy_list_val, label='Validation Accuracy', color='green')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.title('Accuracy Over Epochs')
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
 plt.show()
 
-# Plotting the loss curve
-plt.plot(train_losses)
-plt.title("Training Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
+
+## Exercise 6.b.6
+
+# Make predictions on the validation set
+outputs_val = model(X_val_tensor)
+predicted_val = (outputs_val.detach().numpy() > 0.5).astype(int)
+
+# Calculate precision, recall, and F1-score on the validation set
+precision = precision_score(y_val_tensor.numpy(), predicted_val)
+recall = recall_score(y_val_tensor.numpy(), predicted_val)
+f1 = f1_score(y_val_tensor.numpy(), predicted_val)
+
+print(f"Validation Precision: {precision:.4f}")
+print(f"Validation Recall: {recall:.4f}")
+print(f"Validation F1-score: {f1:.4f}")
+
+# Optionally, you can also calculate these metrics on the training data (for monitoring during training)
+outputs_train = model(X_train_tensor)
+predicted_train = (outputs_train.detach().numpy() > 0.5).astype(int)
+
+precision_train = precision_score(y_train_tensor.numpy(), predicted_train)
+recall_train = recall_score(y_train_tensor.numpy(), predicted_train)
+f1_train = f1_score(y_train_tensor.numpy(), predicted_train)
+
+print(f"Training Precision: {precision_train:.4f}")
+print(f"Training Recall: {recall_train:.4f}")
+print(f"Training F1-score: {f1_train:.4f}")
+
+# Plot comparison of training and validation metrics
+metrics_names = ['Precision', 'Recall', 'F1-score']
+training_scores = [precision_train, recall_train, f1_train]
+validation_scores = [precision, recall, f1]
+
+x = np.arange(len(metrics_names))  # the label locations
+width = 0.35  # the width of the bars
+
+fig, ax = plt.subplots()
+bars1 = ax.bar(x - width/2, training_scores, width, label='Training')
+bars2 = ax.bar(x + width/2, validation_scores, width, label='Validation')
+
+# Add some text for labels, title and custom x-axis tick labels, etc.
+ax.set_ylabel('Scores')
+ax.set_title('Model Performance Metrics')
+ax.set_xticks(x)
+ax.set_xticklabels(metrics_names)
+ax.legend()
+
+# Annotate the bars with their values
+for bars in [bars1, bars2]:
+    for bar in bars:
+        height = bar.get_height()
+        ax.annotate(f'{height:.2f}',
+                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                    xytext=(0, 3),  # offset text above bar
+                    textcoords="offset points",
+                    ha='center', va='bottom')
+
+plt.ylim(0, 1)  # set y-axis from 0 to 1 for clarity
+plt.tight_layout()
 plt.show()
-
-# Plotting the accuracy curve
-plt.plot(train_accuracies)
-plt.title("Training Accuracy")
-plt.xlabel("Epoch")
-plt.ylabel("Accuracy")
-plt.show()
-
-# Evaluate the model on the validation set
-model.eval()  # Set the model to evaluation mode
-with torch.no_grad():
-    # Forward pass on validation set
-    val_outputs = model(torch.tensor(X_val, dtype=torch.float32))
-    val_preds = (val_outputs.squeeze() > 0.5).float()
-
-# Compute the classification metrics
-accuracy = accuracy_score(Y_val, val_preds.numpy())
-precision = precision_score(Y_val, val_preds.numpy())
-recall = recall_score(Y_val, val_preds.numpy())
-f1 = f1_score(Y_val, val_preds.numpy())
-
-print(f'Accuracy: {accuracy:.4f}')
-print(f'Precision: {precision:.4f}')
-print(f'Recall: {recall:.4f}')
-print(f'F1-score: {f1:.4f}')
